@@ -1,0 +1,193 @@
+#多节点Devstack部署Zun
+
+
+1.
+官方文档:https://docs.openstack.org/devstack/latest/
+
+#0.CentOS系统安装要求
+#测试安装使用的是CentOS7.4
+#不建议使用最新内核，可能会有性能问题
+#虚拟机最低配置2核心6GB内存
+#需要安装图形化界面以运行PyCharm
+#语言建议选用英文以避免字符问题
+
+#1.禁用SELinux
+sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+
+#2.设定主机名，配置/etc/hosts文件。注意修改其中的服务器IP地址
+hostnamectl set-hostname node100
+echo -e '192.168.122.100\tnode100 node100.localdomain' >> /etc/hosts
+echo -e '192.168.122.101\tnode101 node101.localdomain' >> /etc/hosts
+echo -e '192.168.122.102\tnode102 node102.localdomain' >> /etc/hosts
+
+#3.安装依赖包
+yum -y install git deltarpm
+
+#4.安装源并修改配置以提高安装效率(可选)
+yum -y install epel-release centos-release-openstack-queens
+rm -f /etc/yum.repos.d/CentOS-Ceph*.repo
+sed -i 's/mirror.centos.org/mirrors.ustc.edu.cn/g' /etc/yum.repos.d/CentOS-OpenStack-queens.repo
+sed -i 's+mirror.centos.org/$contentdir+mirrors.ustc.edu.cn/centos+' /etc/yum.repos.d/CentOS-QEMU-EV.repo
+sed -i 's+download.fedoraproject.org/pub+mirrors.ustc.edu.cn+' /etc/yum.repos.d/epel.repo
+sed -i 's/^#baseurl/baseurl/' /etc/yum.repos.d/epel.repo
+sed -i 's/^metalink/#metalink/' /etc/yum.repos.d/epel.repo
+sed -i 's/^mirrorlist/#mirrorlist/' /etc/yum.repos.d/epel.repo
+
+#5.禁用会干扰OpenStack的服务并重启系统
+systemctl disable firewalld NetworkManager
+reboot
+
+#6.所有节点创建stack用户,最好使用相同id
+useradd -s /bin/bash -d /opt/stack -m stack -u 1000
+echo "stack ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/stack
+
+#配置ssh无密码连接连接
+ssh-keygen -q -t rsa -b 2048 -f ~/.ssh/id_rsa -N ''
+ssh-copy-id 192.168.122.101
+ssh-copy-id 192.168.122.102
+
+
+#7.配置root用户PIP源以提高安装效率(可选)
+mkdir ~/.pip/
+cat << EOF > ~/.pip/pip.conf
+[global]
+index-url = https://mirrors.ustc.edu.cn/pypi/web/simple
+format = columns
+EOF
+
+#8.配置stack用户pip源以提高安装效率(可选)
+su - stack
+mkdir ~/.pip/
+cat << EOF > ~/.pip/pip.conf
+[global]
+index-url = https://mirrors.ustc.edu.cn/pypi/web/simple
+format = columns
+EOF
+
+#9.stack用户GIT获取指定分支的项目
+cd ~
+git clone http://git.trystack.cn/openstack-dev/devstack -b stable/queens
+git clone http://git.trystack.cn/openstack/requirements -b stable/queens
+git clone http://git.trystack.cn/kanaka/noVNC -b master
+cp -p ~/noVNC/vnc_lite.html ~/noVNC/vnc_auto.html
+
+#10.修改脚本,避免文件下载失败导致安装中断
+sed -i 's/^    PYPI_ALTERNATIVE_URL=/    sudo yum -y install python-pip #PYPI_ALTERNATIVE_URL=/' ~/devstack/stack.sh
+
+#11.控制节点stack用户创建local.conf文件,修改IP地址
+cat << EOF > ~/devstack/local.conf
+[[local|localrc]]
+DATABASE_PASSWORD=admin
+RABBIT_PASSWORD=stackrabbit
+SERVICE_PASSWORD=servicepassword
+ADMIN_PASSWORD=admin
+WSGI_MODE=mod_wsgi
+NOVA_USE_MOD_WSGI=False
+CINDER_USE_MOD_WSGI=False
+GIT_BASE=http://git.trystack.cn
+HOST_IP=192.168.122.118   #本机IP地址
+SERVICE_IP_VERSION=4
+MULTI_HOST=True
+SERVICE_HOST=192.168.122.118   #控制节点IP地址
+DATABASE_TYPE=mysql
+MYSQL_HOST=$SERVICE_HOST
+RABBIT_HOST=$SERVICE_HOST
+TARGET_BRANCH=stable/queens
+disable_service tempest dstat
+DOWNLOAD_DEFAULT_IMAGES=False
+NEUTRON_CREATE_INITIAL_NETWORKS=False
+enable_plugin zun http://git.trystack.cn/openstack/zun master
+enable_plugin zun-ui http://git.trystack.cn/openstack/zun-ui master
+enable_plugin devstack-plugin-container http://git.trystack.cn/openstack/devstack-plugin-container master
+enable_plugin kuryr-libnetwork http://git.trystack.cn/openstack/kuryr-libnetwork master
+KURYR_CAPABILITY_SCOPE=global
+KURYR_PROCESS_EXTERNAL_CONNECTIVITY=False
+KURYR_ETCD_PORT=2379
+EOF
+
+#计算节点部署
+cat << EOF > ~/devstack/local.conf
+[[local|localrc]]
+DATABASE_PASSWORD=admin
+RABBIT_PASSWORD=stackrabbit
+SERVICE_PASSWORD=servicepassword
+ADMIN_PASSWORD=admin
+WSGI_MODE=mod_wsgi
+NOVA_USE_MOD_WSGI=False
+CINDER_USE_MOD_WSGI=False
+GIT_BASE=http://git.trystack.cn
+HOST_IP=192.168.122.120   #本机IP地址
+SERVICE_IP_VERSION=4
+MULTI_HOST=True
+SERVICE_HOST=192.168.122.118   #控制节点IP地址
+DATABASE_TYPE=mysql
+MYSQL_HOST=$SERVICE_HOST
+RABBIT_HOST=$SERVICE_HOST
+GLANCE_HOSTPORT=$SERVICE_HOST:9292
+ENABLED_SERVICES=n-cpu,q-agt,n-api-meta,c-vol,placement-client,zun-compute,kuryr-libnetwork
+NOVA_VNC_ENABLED=True
+NOVNCPROXY_URL="http://$SERVICE_HOST:6080/vnc_auto.html"
+VNCSERVER_LISTEN=$HOST_IP
+VNCSERVER_PROXYCLIENT_ADDRESS=$VNCSERVER_LISTEN
+TARGET_BRANCH=stable/queens
+disable_service tempest dstat horizon
+DOWNLOAD_DEFAULT_IMAGES=False
+NEUTRON_CREATE_INITIAL_NETWORKS=False
+enable_plugin zun http://git.trystack.cn/openstack/zun master
+#enable_plugin zun-ui http://git.trystack.cn/openstack/zun-ui master
+enable_plugin devstack-plugin-container http://git.trystack.cn/openstack/devstack-plugin-container master
+enable_plugin kuryr-libnetwork http://git.trystack.cn/openstack/kuryr-libnetwork master
+KURYR_CAPABILITY_SCOPE=global
+KURYR_PROCESS_EXTERNAL_CONNECTIVITY=False
+KURYR_ETCD_PORT=2379
+
+
+
+#12.stack用户运行stack.sh,安装失败请排除错误继续运行
+~/devstack/stack.sh
+#如果仍然报错,请先执行如下脚本
+~/devstack/unstack.sh
+
+#13.安装完成启用WEB服务,停止并禁用iptables服务
+sudo systemctl enable httpd
+sudo systemctl stop iptables
+sudo systemctl disable iptables
+
+#14.登录dashboard时可能会有报错,刷新页面即可
+
+#15.stack用户安装neutron-lib至所在目录(可选)
+cd ~
+sudo pip uninstall -y neutron-lib
+git clone http://git.trystack.cn/openstack/neutron-lib -b stable/queens
+cd ~/neutron-lib/
+sudo python setup.py develop
+sudo python setup.py install
+
+#16.安装PyCharm
+su - root
+cd /opt/
+wget https://download.jetbrains.com/python/pycharm-community-2018.1.4.tar.gz
+tar -zxf pycharm-community-2018.1.4.tar.gz
+cd ~
+ln -s /opt/pycharm-community-2018.1.4/bin/pycharm.sh ~/pycharm.sh 
+
+#17.root用户登录Gnome桌面,打开terminal执行命令
+~/pycharm.sh 
+#PyCharm配置neutron debug环境详见文档
+#how-to-debug-neutron-with-pycharm.docx
+#how-to-debug-neutron-fwaas-api.txt
+
+#云主机测试专用镜像
+https://download.cirros-cloud.net/0.4.0/cirros-0.4.0-x86_64-disk.img
+
+
+
+
+
+
+
+
+
+
+
+
