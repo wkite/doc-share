@@ -116,8 +116,8 @@ sudo pip install
 ~/devstack/unstack.sh
 卸载后，必须在local.conf中增加enable_service placement-api
 
-#15.安装完成启用WEB服务,停止并禁用iptables服务
-sudo systemctl enable httpd
+#15.安装完成启用WEB和Docker服务,停止并禁用iptables服务
+sudo systemctl enable httpd docker
 sudo systemctl stop iptables
 sudo systemctl disable iptables
 

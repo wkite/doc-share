@@ -6,7 +6,7 @@ openstack image create --disk-format qcow2 --container-format bare --public --pr
 openstack network create  --share --external --provider-physical-network public --provider-network-type flat public
 
 #创建供应商网络子网
-openstack subnet create --network public --allocation-pool start=172.16.26.50,end=172.16.26.78 --dns-nameserver 202.96.209.133 --gateway 172.16.26.254 --subnet-range 172.16.26.0/24 subnet1
+openstack subnet create --network public --allocation-pool start=192.168.123.50,end=192.168.123.78 --dns-nameserver 202.96.209.133 --gateway 192.168.123.254 --subnet-range 192.168.123.0/24 subnet1
 
 #创建自服务网络1,2
 openstack network create --provider-network-type vxlan admin-net1
@@ -42,8 +42,8 @@ openstack flavor create --id 256 --ram 256 --disk 0 --vcpus 1 cirros256
 openstack keypair create --public-key /root/.ssh/id_rsa.pub mykey
 
 #批量创建云主机
-openstack server create --flavor cirros256 --image cirros-0.3.5-x86_64-disk --network admin-net1 --min 3 --max 3 --wait admin-net1
-openstack server create --flavor cirros256 --image cirros-0.3.5-x86_64-disk --network admin-net2 --min 3 --max 3 --wait admin-net2
+openstack server create --flavor cirros256 --image cirros --network admin-net1 --min 3 --max 3 --wait admin-net1
+openstack server create --flavor cirros256 --image cirros --network admin-net2 --min 3 --max 3 --wait admin-net2
 
 
 #########常用操作#########
@@ -108,9 +108,54 @@ openstack firewall group set --disable 10.1.1.0-firewallgroup
 openstack firewall group create --name 10.1.1.0-firewallgroup --port <name or id>
 
 
+#容器操作
+docker pull cirros
+docker save cirros | openstack image create cirros-docker --public --container-format docker --disk-format raw
+#创建容器
+zun create --name test-1 -i --net network=admin-net1 --image-driver glance cirros-docker /bin/sh
+#列出容器
+zun list
+#启动容器
+zun start test
 
 
 
 
+nova-manage api_db sync
+nova-manage cell_v2 map_cell0
+nova-manage db sync
+nova-manage cell_v2 create_cell --name cell1
+systemctl restart httpd
 
+#Nova Cellv2操作
+nova-manage cell_v2 create_cell --name cell2 \
+--database_connection mysql+pymysql://root:password@192.168.122.120/nova_cell2?charset=utf8 \
+--transport-url rabbit://stackrabbit:password@192.168.122.120:5672/nova_cell2 --verbose
+
+nova-manage cell_v2 create_cell --name cell1 --database_connection mysql+pymysql://root:admin@192.168.122.119/nova_cell1?charset=utf8 --transport-url rabbit://stackrabbit:stackrabbit@192.168.122.119:5672/nova_cell1 --verbose
+
+nova-manage cell_v2 create_cell --name cell2 --database_connection mysql+pymysql://root:admin@192.168.122.120/nova_cell2?charset=utf8 --transport-url rabbit://stackrabbit:stackrabbit@192.168.122.120:5672/nova_cell2 --verbose
+
+
+nova-manage cell_v2 list_hosts
+nova-manage cell_v2 delete_host --cell_uuid 5843805a-f175-4b25-a73c-af7edeaa6d5b --host node118
+nova-manage cell_v2 list_hosts
+nova-manage cell_v2 delete_cell 5843805a-f175-4b25-a73c-af7edeaa6d5b
+nova-manage cell_v2 delete_cell --cell_uuid 5843805a-f175-4b25-a73c-af7edeaa6d5b
+
+
+
+
+docker network create --driver=kuryr --ipam-driver=kuryr --subnet 10.2.2.0/24 --gateway 10.2.2.1 -o neutron.net.uuid=79f912ee-4d00-4e90-a581-ac1667f84e9f --scope local kuryr
+
+
+/opt/stack/bin/etcdctl --endpoints http://192.168.122.118:2379 ls /docker/network/v1.0/
+/opt/stack/bin/etcdctl --endpoints http://192.168.122.118:2379 member list
+
+/opt/stack/bin/etcd --name node118 --data-dir /opt/stack/data/etcd --initial-advertise-peer-urls http://192.168.122.118:2380 --advertise-client-urls http://192.168.122.118:2379 --listen-peer-urls http://0.0.0.0:2380  --listen-client-urls http://192.168.122.118:2379
+
+
+
+
+/opt/stack/bin/etcd --name node118 --data-dir /opt/stack/data/etcd --initial-advertise-peer-urls http://192.168.122.118:2380 --advertise-client-urls http://192.168.122.118:2379 --listen-client-urls http://192.168.122.118:2379
 

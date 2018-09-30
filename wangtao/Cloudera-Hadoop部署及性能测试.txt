@@ -230,6 +230,15 @@ for i in {b..i}; do pvcreate /dev/sd"$i"1 -y; done
 for i in {b..i}; do vgcreate vg"$i" /dev/sd"$i"1; done
 #物理机创建lv
 for i in {b..i}; do lvcreate -l 100%FREE -n lv$i vg$i; done
+#物理机删除lv
+for i in {b..i}; do lvremove -y /dev/vg$i/lv$i; done
+#物理机删除vg
+for i in {b..i}; do vgremove vg$i; done
+#物理机删除pv
+for i in {b..i}; do pvremove /dev/sd"$i"1; done
+
+
+
 
 
 #八块盘分区并格式化
@@ -262,8 +271,26 @@ done
     </disk>
 
 
+#计算任务运行时间
+grep 'mapreduce.Job: Job job_' *.txt | awk '{print$1"."$2}' | awk -F'.' '{print$1" "$NF}' | awk '{if(NR%2!=0)ORS=" ";else ORS="\n"}1' | while read example start ignore end; do START=$(date +%s -d "$start"); END=$(date +%s -d "$end"); TIME=$(($END - $START)); echo -e "$example:\tstart: $start\tend: $end\ttime: $TIME seconds , $(awk -v x=$TIME 'BEGIN{printf "%.1f",x/60}') mins"; done
 
 
+#增加熵
+#http://blog.sina.com.cn/s/blog_8ea8e9d50102vubk.html
+#查看熵池
+cat /proc/sys/kernel/random/entropy_avail
+#安装
+yum -y install rng-tools
+#配置
+cat << EOF > /etc/sysconfig/rngd
+EXTRAOPTIONS="--rng-device /dev/urandom"
+EOF
+#启动
+systemctl start rngd
+systemctl enable rngd
+systemctl status rngd
+#查看熵池
+cat /proc/sys/kernel/random/entropy_avail
 
 
 
