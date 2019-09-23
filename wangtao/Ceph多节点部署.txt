@@ -1,7 +1,7 @@
 #Ceph多节点部署
 
 #环境为4节点
-#管理节点	cephadmin
+#管理节点	cephdeploy
 #数据节点	cephnode{1..3}
 
 ############准备环境############
@@ -50,9 +50,9 @@ enabled=1
 gpgcheck=0
 EOF
 
-#3.管理节点安装ceph-deploy
+#3.管理节点安装ceph-deploy及依赖
 #yum update
-yum -y install ceph-deploy
+yum -y install ceph-deploy python-setuptools
 
 
 
@@ -86,8 +86,8 @@ EOF
 ceph-deploy new cephnode{1..3}
 
 #4.修改配置文件vim ~/ceph1/ceph.conf
-public network = 10.0.10.0/24	#(可选)管理网
-cluster network = 10.0.20.0/24	#(可选)集群网络
+public network = 10.0.10.0/24	#(可选)管理网(MON MDS OSD)
+cluster network = 10.0.20.0/24	#(可选)集群网络(OSD)
 rbd_default_features = 1		#禁用内核不支持的特性
 [mon]
 mon_allow_pool_delete = true	#(可选)允许删除pool
@@ -106,13 +106,18 @@ ceph.bootstrap-rgw.keyring
 ceph.bootstrap-rbd.keyring
 
 #7.分发配置文件和管理密钥到所有节点
-#ceph-deploy --overwrite-conf admin cephadmin cephnode{1..3}
-ceph-deploy admin cephadmin cephnode{1..3}
+#ceph-deploy --overwrite-conf admin cephnode{1..3}
+ceph-deploy admin cephnode{1..3}
 
 #8.部署管理器守护程序(仅适用于luminous及以后版本)
 ceph-deploy mgr create cephnode{1..3}
 
 #9.添加6个OSD.假设每个节点磁盘为vdb,vdc
+find /dev/mapper/ceph--*| while read LV; do lvremove -y $LV; done
+vgs | grep ceph | awk '{print$1}' | while read VG; do vgremove $VG; done
+
+for DISK in {b..i}; do ceph-deploy osd create --data /dev/sd${DISK}1 compute120; done
+
 ceph-deploy osd create --data /dev/vdb cephnode1
 ceph-deploy osd create --data /dev/vdb cephnode2
 ceph-deploy osd create --data /dev/vdb cephnode3
@@ -134,11 +139,17 @@ ceph quorum_status --format json-pretty
 ceph-deploy install --rgw cephnode{1..3}
 
 #2.(可选)指定默认值,需根据osd及pool数量计算
-osd pool default pg num = 32
-osd pool default pgp num = 32
+https://ceph.com/pgcalc/
+ceph -s
+ceph osd pool ls
+ceph osd pool default pg num = 32
+ceph osd pool default pgp num = 32
 
 #3.添加对象存储RGW实例，例如：
 ceph-deploy rgw create cephnode{1..3}
+#检查状态
+ceph -s
+ceph osd pool ls
 #默认会创建4个pool
 #1 .rgw.root,2 default.rgw.control,3 default.rgw.meta,4 default.rgw.log,
 #手动调整pg,pgp示例
@@ -157,7 +168,7 @@ rgw_frontends = "civetweb port=80"
 rgw_frontends = "civetweb port=80"
 
 EOF
-ceph-deploy --overwrite-conf admin cephadmin cephnode{1..3}
+ceph-deploy --overwrite-conf admin cephnode{1..3}
 
 #5.分别重新启动ceph-radosgw服务使新端口设置生效
 systemctl restart ceph-radosgw@rgw.cephnode1.service
@@ -216,6 +227,8 @@ ceph osd pool create rbdpool 128
 
 #5.列出存储池
 ceph osd lspools
+ceph osd pool ls
+
 
 #6.关联存储池至应用,未执行此操作ceph health会报错
 #ceph osd pool application enable {pool-name} {application-name}
@@ -316,6 +329,41 @@ mount -t ceph {ip-address-of-monitor}:6789:/ /mnt/mycephfs
 mkdir -p /mnt/mycephfs
 #ceph-fuse -m {ip-address-of-monitor}:6789 ~/mycephfs -k ./ceph.client.admin.keyring 
 ceph-fuse -m 192.168.0.1:6789 ~/mycephfs
+
+
+#推送配置后重启Monitor
+ceph-deploy --overwrite-conf config push cephnode{1..3}
+systemctl restart ceph-mon.target
+
+
+#Ceph服务状态查看
+systemctl status ceph\*.service ceph\*.target
+
+
+#Ceph服务依次重启
+systemctl restart ceph-mon.target
+systemctl restart ceph-mgr.target
+systemctl restart ceph-osd.target
+
+#Ceph查看POOL的PG在OSD中分布情况
+ceph osd getmap -o osdmap
+ceph osd getcrushmap -o crushmap
+osdmaptool osdmap --import-crush crushmap --test-map-pgs --pool {pool_id}
+
+#单节点调整Ceph PG分布策略
+ceph osd getcrushmap -o crushmap
+crushtool -d crushmap > crushmap.txt
+sed -i 's/type host/type osd/' crushmap.txt
+crushtool -o crushmapnew -c crushmap.txt
+ceph osd setcrushmap -i crushmapnew
+
+#查看调整OSD权重
+ceph osd crush tree
+ceph osd crush reweight osd.id  {value}
+
+ceph osd dump
+
+
 
 
 #OpenStack支持
